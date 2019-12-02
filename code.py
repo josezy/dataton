@@ -126,7 +126,16 @@ def balance_data(data, rpta, max_rptas=None, balance_factor=_BALANCE_FACTOR):
     return bal_data, bal_rpta
 
 
-def train_model(model, data, rpta, epochs=500):
+def split_train_test(data, rpta, tt_threshold=0.7):
+    threshold = int(len(rpta) * tt_threshold)
+    train_data = data.iloc[:threshold]
+    test_data = data.iloc[threshold:]
+    train_rpta = rpta.iloc[:threshold]
+    test_rpta = rpta.iloc[threshold:]
+    return train_data, train_rpta, test_data, test_rpta
+
+
+def train_model(model, data, rpta, epochs=100):
     bal_data, bal_rpta = balance_data(data, rpta)
     model.fit(bal_data, bal_rpta, epochs=epochs, batch_size=128)
     test_loss, test_acc = model.evaluate(data, rpta, verbose=2)
@@ -152,20 +161,27 @@ def build_model(input_dim):
 
 
 if __name__ == '__main__':
-    _, data, rpta = load_data(cache=False)
+    _, data, rpta = load_data()
     print("[!] Data loaded")
 
-    model = build_model(input_dim=len(data.columns))
-    train_model(model, data, rpta, epochs=100)
+    train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
+    model = build_model(input_dim=len(train_data.columns))
+    train_model(model, train_data, train_rpta, epochs=100)
 
     # High voltage
-    prediction = model.predict_classes(data)
-    prediction = pd.DataFrame(prediction[:, 0], columns=['probabilidad'])
+    bal_data, bal_rpta = balance_data(
+        test_data, test_rpta, max_rptas=200, balance_factor=1.0)
+    prediction = model.predict_classes(bal_data)
+    prediction = pd.DataFrame(
+        prediction[:, 0],
+        columns=['probabilidad'],
+        index=bal_data.index
+    )
     ones = prediction[prediction.probabilidad == 1]
-    print('\nPredicted', len(ones), 'ones. Expected', rpta[rpta == 1].count())
+    print('\nPredicted', len(ones), 'ones. Expected', bal_rpta[bal_rpta == 1].count())
 
-    wrong = np.where(prediction.probabilidad != rpta)[0]
-    print(f"Error: {len(wrong) / len(rpta)} ({len(wrong)} of {len(rpta)})\n")
+    wrong = np.where(prediction.probabilidad != bal_rpta)[0]
+    print(f"Error: {len(wrong) / len(bal_rpta)} ({len(wrong)} of {len(bal_rpta)})\n")
 
     # ================== [PREDICT] ================== #
     if PREDICT:
