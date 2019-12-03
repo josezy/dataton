@@ -10,8 +10,9 @@ from fts_utils import (
 )
 
 
-LITE = True
 PREDICT = False
+_LITE = True
+_CACHE = True
 _BALANCE_FACTOR = 2.0  # relation between number of 0 & 1
 
 con = psycopg2.connect(
@@ -23,15 +24,16 @@ con = psycopg2.connect(
 )
 
 
-def load_data(training=True, cache=True):
-    print(f"[!] Loading data: training={training}, lite={LITE}, cache={cache}")
+def load_data(training=True, lite=True, cache=True):
+    lite = lite if training else False
+    print(f"[!] Loading data: training={training}, lite={lite}, cache={cache}")
     train_str = '_train' if training else '_predict'
-    lite_str = '_lite' if LITE else ''
+    lite_str = '_lite' if lite else ''
     feats_file_name = f"features{lite_str}{train_str}.csv"
 
     if cache:
         try:
-            fts = pd.read_csv(f'data/{feats_file_name}')
+            fts = pd.read_csv(f'data/features/{feats_file_name}')
             return fts.id, fts.iloc[:, 1:-1], fts.var_rpta
         except FileNotFoundError:
             print("Could not use cached features:", feats_file_name)
@@ -69,7 +71,7 @@ def load_data(training=True, cache=True):
         features,
         var_rpta.get('var_rpta')
     ], axis=1)
-    full_features.to_csv(f'data/{feats_file_name}', index=False)
+    full_features.to_csv(f'data/features/{feats_file_name}', index=False)
     return totales.id, features, var_rpta.get('var_rpta')
 
 
@@ -96,14 +98,6 @@ def split_train_test(data, rpta, tt_threshold=0.7):
     return train_data, train_rpta, test_data, test_rpta
 
 
-def train_model(model, data, rpta, epochs=100):
-    bal_data, bal_rpta = balance_data(data, rpta)
-    model.fit(bal_data, bal_rpta, epochs=epochs, batch_size=128)
-    test_loss, test_acc = model.evaluate(data, rpta, verbose=2)
-    print('\nTest loss:', test_loss)
-    print('Test accuracy:', test_acc)
-
-
 def build_model(input_dim):
     # Model definition
     model = keras.Sequential([
@@ -122,12 +116,17 @@ def build_model(input_dim):
 
 
 if __name__ == '__main__':
-    _, data, rpta = load_data()
+    _, data, rpta = load_data(lite=_LITE, cache=_CACHE)
+    train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
     print("[!] Data loaded")
 
-    train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
-    model = build_model(input_dim=len(train_data.columns))
-    train_model(model, train_data, train_rpta, epochs=100)
+    model = build_model(input_dim=len(data.columns))
+
+    bal_data, bal_rpta = balance_data(train_data, train_rpta)
+    model.fit(bal_data, bal_rpta, epochs=100, batch_size=128)
+
+    test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
+    print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
 
     # High voltage
     bal_data, bal_rpta = balance_data(
