@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 from eli5.sklearn import PermutationImportance
 from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
 
-from code import balance_data, build_model
+from dataton import balance_data, build_model
 
 # LOAD DATA
 full_feats = pd.read_csv('data/features_lite_train.csv')
