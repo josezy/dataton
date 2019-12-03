@@ -13,11 +13,9 @@ from matplotlib import pyplot as plt
 from eli5.sklearn import PermutationImportance
 from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
 
-# from code import load_data
 from code import balance_data, build_model
 
 # LOAD DATA
-# ids, data, rpta = load_data()
 full_feats = pd.read_csv('data/features_lite_train.csv')
 rpta = full_feats.var_rpta
 features = full_feats.iloc[:, 1:-1]
@@ -52,7 +50,7 @@ def base_model():
 
 
 model = KerasRegressor(build_fn=base_model)
-model.fit(features, rpta, epochs=30, batch_size=128)
+model.fit(features, rpta, epochs=50, batch_size=128)
 
 perm = PermutationImportance(model, random_state=1).fit(features, rpta)
 print(eli5.show_weights(perm, feature_names=features.columns.tolist()).data)
