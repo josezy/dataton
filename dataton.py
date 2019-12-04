@@ -6,13 +6,20 @@ import pandas as pd
 from tensorflow import keras
 
 from fts_utils import (
-    fts_totales, fts_var_rpta, fts_sesiones
+    fts_totales,
+    fts_var_rpta,
+    fts_sesiones,
+    fts_modas,
+    fts_ratio,
+    fts_sesion_stats,
+    fts_fecha_trxn,
 )
 
 
-PREDICT = False
-_LITE = True
-_CACHE = True
+PREDICT = True
+_LITE = False
+_CACHE = False
+_EPOCHS = 200
 _BALANCE_FACTOR = 2.0  # relation between number of 0 & 1
 
 con = psycopg2.connect(
@@ -29,12 +36,17 @@ def load_data(training=True, lite=True, cache=True):
     print(f"[!] Loading data: training={training}, lite={lite}, cache={cache}")
     train_str = '_train' if training else '_predict'
     lite_str = '_lite' if lite else ''
-    feats_file_name = f"features{lite_str}{train_str}.csv"
+    feats_file_name = f"features{train_str}{lite_str}.csv"
 
     if cache:
         try:
             fts = pd.read_csv(f'data/features/{feats_file_name}')
-            return fts.id, fts.iloc[:, 1:-1], fts.var_rpta
+            print("Using cached features from ", feats_file_name)
+            print("\tFeatures:", fts.iloc[:, 1:-1].columns)
+            if training:
+                return fts.id, fts.iloc[:, 1:-1], fts.var_rpta
+            else:
+                return fts.id, fts.iloc[:, 1:], None
         except FileNotFoundError:
             print("Could not use cached features:", feats_file_name)
 
@@ -49,30 +61,47 @@ def load_data(training=True, lite=True, cache=True):
         else 'ids_predict'
     )
 
-    print("total_trxn, total_sesiones")
-    totales = fts_totales(con, data_table_name)
+    print("total_office_trxn, total_night_trxn")
+    fecha_trxns = fts_fecha_trxn(con, data_table_name)
 
-    print("month_analisis, segmento")
-    var_rpta = fts_var_rpta(con, rpta_table_name, training)
+    print("total_atypical_sesion, avg_normal_sesion")
+    sesiones = fts_sesion_stats(con, data_table_name)
+
+    print("ratio_financiera")
+    ratios = fts_ratio(con, data_table_name)
+
+    print("moda_cdgtrn")
+    modas = fts_modas(con, data_table_name)
 
     print("times_used_disp, times_used_canal")
     disposit, canal = fts_sesiones(con, data_table_name)
 
+    print("total_trxn, total_sesiones")
+    totales = fts_totales(con, data_table_name)
+
+    print("year_analisis, segmento")
+    var_rpta = fts_var_rpta(con, rpta_table_name, training)
+
     features = pd.concat([
         totales.total_trxn,
         totales.total_sesiones,
-        var_rpta.month_analisis,
+        # var_rpta.year_analisis,
         var_rpta.segmento,
         disposit.times_used_disp,
         canal.times_used_canal,
+        modas.moda_cdgtrn,
     ], axis=1)
+    features = features.join(ratios, on='id')
+    features = features.join(sesiones, on='id')
+    features = features.join(fecha_trxns, on='id')
+
+    features = features.fillna(-1)
     full_features = pd.concat([
-        totales.id,
         features,
         var_rpta.get('var_rpta')
     ], axis=1)
-    full_features.to_csv(f'data/features/{feats_file_name}', index=False)
-    return totales.id, features, var_rpta.get('var_rpta')
+    full_features.to_csv(f'data/features/{feats_file_name}')
+    return var_rpta.index.to_series(), features, var_rpta.get('var_rpta')
 
 
 def balance_data(data, rpta, max_rptas=None, balance_factor=_BALANCE_FACTOR):
@@ -102,9 +131,9 @@ def build_model(input_dim):
     # Model definition
     model = keras.Sequential([
         keras.layers.Dense(12, input_dim=input_dim, activation='relu'),
-        keras.layers.Dense(32, activation='relu'),
-        keras.layers.Dense(64, activation='relu'),
         keras.layers.Dense(16, activation='relu'),
+        keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dense(32, activation='relu'),
         keras.layers.Dense(1, activation='sigmoid'),
     ])
     model.compile(
@@ -123,7 +152,7 @@ if __name__ == '__main__':
     model = build_model(input_dim=len(data.columns))
 
     bal_data, bal_rpta = balance_data(train_data, train_rpta)
-    model.fit(bal_data, bal_rpta, epochs=100, batch_size=128)
+    model.fit(bal_data, bal_rpta, epochs=_EPOCHS)
 
     test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
     print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
@@ -148,8 +177,7 @@ if __name__ == '__main__':
         print("[+] Predicting real data")
         ids, data, _ = load_data(training=False, cache=False)
         prediction = model.predict(data)
-        prediction = pd.DataFrame(prediction[:, 0], columns=['probabilidad'])
-        submission = pd.concat([ids, prediction], axis=1)
-        submission.to_csv('data/submissions/jose.csv', index=False)
+        submission = pd.DataFrame(prediction[:, 0], columns=['probabilidad'], index=ids)
+        submission.to_csv('data/submissions/jose.csv')
 
     con.close()
