@@ -93,6 +93,11 @@ CREATE TABLE maestro_cdgtrn_cdgrpta (
     culpa_banco varchar,
     producto_asociado varchar
 );
+UPDATE maestro_cdgtrn_cdgrpta SET cdgtrn = '-1' WHERE cdgtrn = 'None'
+UPDATE maestro_cdgtrn_cdgrpta SET cdgrpta = '-1' WHERE cdgrpta = 'None'
+ALTER TABLE maestro_cdgtrn_cdgrpta
+ALTER COLUMN cdgtrn TYPE integer USING cdgtrn::numeric::integer;
+ALTER COLUMN cdgrpta TYPE integer USING cdgrpta::numeric::integer;
 
 
 -- Import data from files
