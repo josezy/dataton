@@ -124,12 +124,12 @@ def fts_fecha_trxn(con, data_table_name):
     return pd.read_sql_query(query, con=con).set_index('id')
 
 
-def fts_ratios_descripcion_grupo(con, data_table_name):
+def fts_ratios_maestro(con, data_table_name):
     descripcion_grupos = pd.read_sql_query(
         "SELECT DISTINCT descripcion_grupo FROM {0}".format(maestro_table_name), con=con)
     d_grupo_values = descripcion_grupos.values
     d_grupo_ratios = ','.join("""
-        (sum(CASE WHEN mcc.descripcion_grupo = '{0}' THEN trxns.vlrtran ELSE 0 END)/count(*)) AS ratio_{1}
+        (sum(CASE WHEN mcc.descripcion_grupo = '{0}' THEN 1 ELSE 0 END)/count(*)) AS ratio_dg_{1}
     """.format(d_grupo, snakecase(
         d_grupo.lower().replace('/', '').replace('#', '').replace('  ', ' ')
     )) for d_grupo in d_grupo_values[:, 0])
@@ -138,7 +138,7 @@ def fts_ratios_descripcion_grupo(con, data_table_name):
         "SELECT DISTINCT producto_asociado FROM {0}".format(maestro_table_name), con=con)
     prod_asociado_values = producto_asociados.values
     prod_asociado_ratios = ','.join("""
-        (sum(CASE WHEN mcc.producto_asociado = '{0}' THEN trxns.vlrtran ELSE 0 END)/count(*)) AS ratio_{1}
+        (sum(CASE WHEN mcc.producto_asociado = '{0}' THEN 1 ELSE 0 END)/count(*)) AS ratio_pa_{1}
     """.format(prod_asociado, snakecase(
         prod_asociado.lower().replace('/', '').replace('#', '').replace('  ', ' ')
     )) for prod_asociado in prod_asociado_values[:, 0])

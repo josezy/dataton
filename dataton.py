@@ -1,9 +1,12 @@
+import time
 import psycopg2
 
 import numpy as np
 import pandas as pd
 
 from tensorflow import keras
+# from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
+# from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.preprocessing import StandardScaler
 
 from fts_utils import (
@@ -14,15 +17,26 @@ from fts_utils import (
     fts_ratio,
     fts_sesion_stats,
     fts_fecha_trxn,
-    fts_ratios_descripcion_grupo,
+    fts_ratios_maestro,
 )
 
+# from ft_selection import rfecv_selector
 
-PREDICT = True
-_LITE = False
-_CACHE = False
-_EPOCHS = 1500
+
+PREDICT = False
+_LITE = True
+_CACHE = True
+_EPOCHS = 100
+_BATCH_SIZE = 1024
 _BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
+
+
+# gs_params = {
+#     'batch_size': [32, 128, 512, 1024],
+#     'nb_epoch': [50, 100, 300, 500],
+#     'optimizer': ['sgd', 'adam', 'rmsprop']
+# }
+
 
 con = psycopg2.connect(
     database="dataton",
@@ -33,9 +47,28 @@ con = psycopg2.connect(
 )
 
 
+def select_features(data, rpta):
+    start = time.time()
+    bal_data, bal_rpta = balance_data(data, rpta, max_rptas=200)
+
+    # Select by RFECV
+    # rfecv_selector.fit(bal_data, bal_rpta)
+    # selected_features = data.columns[rfecv_selector.support_].to_list()
+
+    # Select by correlation matrix
+    data = bal_data.join(bal_rpta)
+    corrmat = data.corr()
+    rpta_corr = abs(corrmat['var_rpta'][:].drop('var_rpta'))
+    top = rpta_corr[rpta_corr > rpta_corr.mean()]
+    selected_features = top.index.to_list()
+
+    print("[+] Feature selection elapsed time:", time.time() - start)
+    return selected_features
+
+
 def load_data(training=True, lite=True, cache=True):
     lite = lite if training else False
-    print(f"[!] Loading data: training={training}, lite={lite}, cache={cache}")
+    print(f"[+] Loading data: training={training}, lite={lite}, cache={cache}")
     train_str = '_train' if training else '_predict'
     lite_str = '_lite' if lite else ''
     feats_file_name = f"features{train_str}{lite_str}.csv"
@@ -43,7 +76,7 @@ def load_data(training=True, lite=True, cache=True):
     if cache:
         try:
             fts = pd.read_csv(f'data/features/{feats_file_name}')
-            print("Using cached features from ", feats_file_name)
+            print("Using cached features from ", feats_file_name, len(fts.columns))
             print("\tFeatures:", fts.iloc[:, 1:-1].columns)
             if training:
                 return fts.id, fts.iloc[:, 1:-1], fts.var_rpta
@@ -64,7 +97,7 @@ def load_data(training=True, lite=True, cache=True):
     )
 
     print("ratio_descripcion_grupo, ratio_producto_asociado")
-    d_grupo_ratios = fts_ratios_descripcion_grupo(con, data_table_name)
+    ratios_maestro = fts_ratios_maestro(con, data_table_name)
 
     print("total_office_trxn, total_night_trxn")
     fecha_trxns = fts_fecha_trxn(con, data_table_name)
@@ -99,9 +132,9 @@ def load_data(training=True, lite=True, cache=True):
     features = features.join(ratios, on='id')
     features = features.join(sesiones, on='id')
     features = features.join(fecha_trxns, on='id')
-    features = features.join(d_grupo_ratios, on='id')
+    features = features.join(ratios_maestro, on='id')
 
-    features = features.fillna(-1)
+    features = features.fillna(0)
     scaler = StandardScaler()
     features[features.columns] = scaler.fit_transform(features[features.columns])
 
@@ -113,7 +146,7 @@ def load_data(training=True, lite=True, cache=True):
     return var_rpta.index.to_series(), features, var_rpta.get('var_rpta')
 
 
-def balance_data(data, rpta, max_rptas=None, balance_factor=_BALANCE_FACTOR):
+def balance_data(data, rpta, max_rptas=None, balance_factor=1.0):
     # balance number of 0 and 1's
     max_rptas = max_rptas or int(rpta.value_counts().min() * balance_factor)
     bal_data = pd.concat([
@@ -136,43 +169,50 @@ def split_train_test(data, rpta, tt_threshold=0.7):
     return train_data, train_rpta, test_data, test_rpta
 
 
-def build_model(input_dim):
+def base_model(input_dim, optimizer='sgd'):
     # Model definition
     model = keras.Sequential([
         keras.layers.Dense(12, input_dim=input_dim, activation='relu'),
-        keras.layers.Dense(16, activation='relu'),
-        keras.layers.Dense(32, activation='relu'),
-        keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dropout(0.5),
         keras.layers.Dense(128, activation='relu'),
-        keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dropout(0.5),
         keras.layers.Dense(32, activation='relu'),
-        keras.layers.Dense(16, activation='relu'),
+        keras.layers.Dropout(0.5),
+        # keras.layers.Dense(128, activation='relu'),
+        # keras.layers.Dense(64, activation='relu'),
+        # keras.layers.Dense(32, activation='relu'),
+        # keras.layers.Dense(16, activation='relu'),
         keras.layers.Dense(1, activation='sigmoid'),
     ])
     model.compile(
-        optimizer='adam',
+        optimizer=optimizer,
         loss='binary_crossentropy',
-        metrics=['accuracy']
+        metrics=['acc']
     )
     return model
 
 
 if __name__ == '__main__':
     _, data, rpta = load_data(lite=_LITE, cache=_CACHE)
+
+    print("[+] Selecting features...")
+    selected_features = select_features(data, rpta)
+    print(f"[+] Features selected [{len(selected_features)}]:\n{selected_features}")
+
+    data = data[selected_features]
     train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
-    print("[!] Data loaded")
+    bal_data, bal_rpta = balance_data(train_data, train_rpta, balance_factor=_BALANCE_FACTOR)
 
-    model = build_model(input_dim=len(data.columns))
-
-    bal_data, bal_rpta = balance_data(train_data, train_rpta)
-    model.fit(bal_data, bal_rpta, epochs=_EPOCHS)
+    model = base_model(input_dim=len(data.columns))
+    model.summary()
+    model.fit(bal_data, bal_rpta, epochs=_EPOCHS, batch_size=_BATCH_SIZE)
 
     test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
     print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
 
     # High voltage
     bal_data, bal_rpta = balance_data(
-        test_data, test_rpta, max_rptas=200, balance_factor=1.0)
+        test_data, test_rpta, max_rptas=500, balance_factor=1.0)
     prediction = model.predict_classes(bal_data)
     prediction = pd.DataFrame(
         prediction[:, 0],
@@ -185,10 +225,28 @@ if __name__ == '__main__':
     wrong = np.where(prediction.probabilidad != bal_rpta)[0]
     print(f"Error: {len(wrong) / len(bal_rpta)} ({len(wrong)} of {len(bal_rpta)})\n")
 
+    # def build_model(optimizer='sgd'):
+    #     return base_model(input_dim=len(data.columns), optimizer=optimizer)
+
+    # Cross validation
+    # classifier = KerasClassifier(build_fn=build_model, nb_epoch=100, batch_size=10)
+    # accuracies = cross_val_score(estimator=classifier, X=bal_data, y=bal_rpta, cv=10, n_jobs=-1)
+    # print(f"[!] Accuracies: mean={accuracies.mean()}, var={accuracies.var()}")
+
+    # Grid Search
+    # classifier = KerasClassifier(build_fn=build_model)
+    # grid_search = GridSearchCV(
+    #     estimator=classifier, param_grid=gs_params, scoring='accuracy', cv=10)
+    # grid_search = grid_search.fit(bal_data, bal_rpta)
+    # print("[!] Gris Search:")
+    # print(f"\tBest params: {grid_search.best_params_}")
+    # print(f"\tBest score: {grid_search.best_score_}")
+
     # ================== [PREDICT] ================== #
     if PREDICT:
-        print("[+] Predicting real data")
+        print("[!] Predicting real data")
         ids, data, _ = load_data(training=False, cache=False)
+        data = data[selected_features]
         prediction = model.predict(data)
         submission = pd.DataFrame(prediction[:, 0], columns=['probabilidad'], index=ids)
         submission.to_csv('data/submissions/jose.csv')

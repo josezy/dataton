@@ -12,7 +12,7 @@ from sklearn.feature_selection import RFECV, SelectKBest, chi2
 from sklearn.ensemble import ExtraTreesClassifier
 
 from eli5.sklearn import PermutationImportance
-from tensorflow.keras.wrappers.scikit_learn import KerasRegressor, KerasClassifier
+from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 
 from dataton import balance_data, build_model
 
@@ -69,7 +69,6 @@ plt.show()
 model = XGBClassifier()
 model.fit(X, y)
 plot_importance(model)
-plt.figure()
 plt.draw()
 
 # cross-validation LENTOO
