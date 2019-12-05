@@ -4,23 +4,25 @@ import numpy as np
 import pandas as pd
 
 from tensorflow import keras
+from sklearn.preprocessing import StandardScaler
 
 from fts_utils import (
     fts_totales,
     fts_var_rpta,
-    fts_sesiones,
+    # fts_sesiones,
     fts_modas,
     fts_ratio,
     fts_sesion_stats,
     fts_fecha_trxn,
+    fts_ratios_descripcion_grupo,
 )
 
 
 PREDICT = True
 _LITE = False
 _CACHE = False
-_EPOCHS = 200
-_BALANCE_FACTOR = 2.0  # relation between number of 0 & 1
+_EPOCHS = 1500
+_BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
 
 con = psycopg2.connect(
     database="dataton",
@@ -61,20 +63,23 @@ def load_data(training=True, lite=True, cache=True):
         else 'ids_predict'
     )
 
+    print("ratio_descripcion_grupo, ratio_producto_asociado")
+    d_grupo_ratios = fts_ratios_descripcion_grupo(con, data_table_name)
+
     print("total_office_trxn, total_night_trxn")
     fecha_trxns = fts_fecha_trxn(con, data_table_name)
 
     print("total_atypical_sesion, avg_normal_sesion")
     sesiones = fts_sesion_stats(con, data_table_name)
 
-    print("ratio_financiera")
+    print("ratio_financiera, ratio_exitosa")
     ratios = fts_ratio(con, data_table_name)
 
-    print("moda_cdgtrn")
+    print("moda_cdgtrn, moda_cdgrpta")
     modas = fts_modas(con, data_table_name)
 
-    print("times_used_disp, times_used_canal")
-    disposit, canal = fts_sesiones(con, data_table_name)
+    # print("times_used_disp, times_used_canal")
+    # disposit, canal = fts_sesiones(con, data_table_name)
 
     print("total_trxn, total_sesiones")
     totales = fts_totales(con, data_table_name)
@@ -87,15 +92,19 @@ def load_data(training=True, lite=True, cache=True):
         totales.total_sesiones,
         # var_rpta.year_analisis,
         var_rpta.segmento,
-        disposit.times_used_disp,
-        canal.times_used_canal,
-        modas.moda_cdgtrn,
+        # disposit.times_used_disp,
+        # canal.times_used_canal,
     ], axis=1)
+    features = features.join(modas, on='id')
     features = features.join(ratios, on='id')
     features = features.join(sesiones, on='id')
     features = features.join(fecha_trxns, on='id')
+    features = features.join(d_grupo_ratios, on='id')
 
     features = features.fillna(-1)
+    scaler = StandardScaler()
+    features[features.columns] = scaler.fit_transform(features[features.columns])
+
     full_features = pd.concat([
         features,
         var_rpta.get('var_rpta')
@@ -132,8 +141,12 @@ def build_model(input_dim):
     model = keras.Sequential([
         keras.layers.Dense(12, input_dim=input_dim, activation='relu'),
         keras.layers.Dense(16, activation='relu'),
+        keras.layers.Dense(32, activation='relu'),
+        keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dense(128, activation='relu'),
         keras.layers.Dense(64, activation='relu'),
         keras.layers.Dense(32, activation='relu'),
+        keras.layers.Dense(16, activation='relu'),
         keras.layers.Dense(1, activation='sigmoid'),
     ])
     model.compile(

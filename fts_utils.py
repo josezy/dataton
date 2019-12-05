@@ -1,5 +1,7 @@
 import pandas as pd
 
+from stringcase import snakecase
+
 
 maestro_table_name = 'maestro_cdgtrn_cdgrpta'
 
@@ -67,7 +69,8 @@ def fts_sesion_stats(con, data_table_name):
             GROUP BY id, sesion
             ORDER BY id, sesion
         ) AS sesion_stats
-        GROUP BY id;
+        GROUP BY id
+        ORDER BY id
     """.format(data_table_name)
     return pd.read_sql_query(query, con=con).set_index('id')
 
@@ -75,25 +78,29 @@ def fts_sesion_stats(con, data_table_name):
 def fts_modas(con, data_table_name):
     query = """
         SELECT id,
-            mode() WITHIN GROUP (ORDER BY cdgtrn) AS moda_cdgtrn
+            mode() WITHIN GROUP (ORDER BY cdgtrn) AS moda_cdgtrn,
+            mode() WITHIN GROUP (ORDER BY cdgrpta) AS moda_cdgrpta
         FROM {0}
-        GROUP BY id;
+        GROUP BY id
+        ORDER BY id
     """.format(data_table_name)
     return pd.read_sql_query(query, con=con).set_index('id')
 
 
 def fts_ratio(con, data_table_name):
     query = """
-        SELECT dtrxnls.id,
-            (sum(CASE WHEN mcc.clasif_trxn = 'Financiera' THEN 1 ELSE 0 END)::numeric / count(*))
-                AS ratio_financiera
-        FROM {0} AS dtrxnls
+        SELECT trxns.id,
+            (sum(CASE WHEN mcc.clasif_trxn = 'Financiera' THEN 1 ELSE 0 END)::numeric / count(*)) AS ratio_financiera,
+            (sum(CASE WHEN mcc.clasif_cod_rpta = 'Exitosa' THEN 1 ELSE 0 END)::numeric / count(*)) AS ratio_exitosa,
+            (sum(CASE WHEN mcc.clasif_cod_rpta = 'No Exitosa' THEN 1 ELSE 0 END)::numeric / count(*)) AS ratio_no_exitosa
+        FROM {0} AS trxns
         INNER JOIN {1} AS mcc
-            ON dtrxnls.canal = mcc.canal
-                AND dtrxnls.disposit = mcc.disposit
-                AND dtrxnls.cdgtrn = mcc.cdgtrn
-                AND dtrxnls.cdgrpta = mcc.cdgrpta
-        GROUP BY dtrxnls.id
+            ON trxns.canal = mcc.canal
+                AND trxns.disposit = mcc.disposit
+                AND trxns.cdgtrn = mcc.cdgtrn
+                AND trxns.cdgrpta = mcc.cdgrpta
+        GROUP BY trxns.id
+        ORDER BY trxns.id
     """.format(data_table_name, maestro_table_name)
     return pd.read_sql_query(query, con=con).set_index('id')
 
@@ -108,9 +115,43 @@ def fts_fecha_trxn(con, data_table_name):
         FROM (
             SELECT id,
                 EXTRACT(hour FROM fecha_trxn) AS hora_trxn,
-                EXTRACT(dow FROM fecha_trxn) as dia_trxn
+                EXTRACT(dow FROM fecha_trxn) AS dia_trxn
             FROM {0}
         ) AS trxn_ts
-        GROUP BY id;
+        GROUP BY id
+        ORDER BY id
     """.format(data_table_name)
+    return pd.read_sql_query(query, con=con).set_index('id')
+
+
+def fts_ratios_descripcion_grupo(con, data_table_name):
+    descripcion_grupos = pd.read_sql_query(
+        "SELECT DISTINCT descripcion_grupo FROM {0}".format(maestro_table_name), con=con)
+    d_grupo_values = descripcion_grupos.values
+    d_grupo_ratios = ','.join("""
+        (sum(CASE WHEN mcc.descripcion_grupo = '{0}' THEN trxns.vlrtran ELSE 0 END)/count(*)) AS ratio_{1}
+    """.format(d_grupo, snakecase(
+        d_grupo.lower().replace('/', '').replace('#', '').replace('  ', ' ')
+    )) for d_grupo in d_grupo_values[:, 0])
+
+    producto_asociados = pd.read_sql_query(
+        "SELECT DISTINCT producto_asociado FROM {0}".format(maestro_table_name), con=con)
+    prod_asociado_values = producto_asociados.values
+    prod_asociado_ratios = ','.join("""
+        (sum(CASE WHEN mcc.producto_asociado = '{0}' THEN trxns.vlrtran ELSE 0 END)/count(*)) AS ratio_{1}
+    """.format(prod_asociado, snakecase(
+        prod_asociado.lower().replace('/', '').replace('#', '').replace('  ', ' ')
+    )) for prod_asociado in prod_asociado_values[:, 0])
+
+    query = """
+        SELECT id, {2}, {3}
+        FROM {0} AS trxns
+        INNER JOIN {1} AS mcc
+            ON trxns.canal = mcc.canal
+                AND trxns.disposit = mcc.disposit
+                AND trxns.cdgtrn = mcc.cdgtrn
+                AND trxns.cdgrpta = mcc.cdgrpta
+        GROUP BY trxns.id
+        ORDER BY trxns.id
+    """.format(data_table_name, maestro_table_name, d_grupo_ratios, prod_asociado_ratios)
     return pd.read_sql_query(query, con=con).set_index('id')
