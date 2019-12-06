@@ -108,18 +108,62 @@ def fts_ratio(con, data_table_name):
 def fts_fecha_trxn(con, data_table_name):
     query = """
         SELECT id,
-            sum(CASE WHEN hora_trxn between 9 and 18 THEN 1 ELSE 0 END) AS total_office_trxn,
-            sum(CASE WHEN hora_trxn between 9 and 18 THEN 0 ELSE 1 END) AS total_night_trxn,
-            sum(CASE WHEN dia_trxn between 1 and 5 THEN 1 ELSE 0 END) AS total_weekday_trxn,
-            sum(CASE WHEN dia_trxn between 1 and 5 THEN 0 ELSE 1 END) AS total_weekend_trxn
+            sum(CASE WHEN hora_trxn BETWEEN 9 AND 18 THEN 1 ELSE 0 END) AS total_office_trxn,
+            sum(CASE WHEN hora_trxn BETWEEN 9 AND 18 THEN 0 ELSE 1 END) AS total_night_trxn,
+            sum(CASE WHEN dia_trxn BETWEEN 1 AND 5 THEN 1 ELSE 0 END) AS total_weekday_trxn,
+            sum(CASE WHEN dia_trxn BETWEEN 1 AND 5 THEN 0 ELSE 1 END) AS total_weekend_trxn,
+            sum(CASE WHEN month_trxn IN (1, 6, 7, 12) THEN 1 ELSE 0 END) AS high_season_trxn,
+            sum(CASE WHEN month_trxn IN (1, 6, 7, 12) THEN 0 ELSE 1 END) AS low_season_trxn
         FROM (
             SELECT id,
                 EXTRACT(hour FROM fecha_trxn) AS hora_trxn,
-                EXTRACT(dow FROM fecha_trxn) AS dia_trxn
+                EXTRACT(dow FROM fecha_trxn) AS dia_trxn,
+                EXTRACT(month FROM fecha_trxn) AS month_trxn
             FROM {0}
         ) AS trxn_ts
         GROUP BY id
         ORDER BY id
+    """.format(data_table_name)
+    return pd.read_sql_query(query, con=con).set_index('id')
+
+
+def fts_month_entropy(con, data_table_name):
+    query = """
+        SELECT id,
+            -(
+                prob_trxn_jan * (CASE WHEN prob_trxn_jan = 0 THEN 0 ELSE log(prob_trxn_jan) END)
+                + prob_trxn_feb * (CASE WHEN prob_trxn_feb = 0 THEN 0 ELSE log(prob_trxn_feb) END)
+                + prob_trxn_mar * (CASE WHEN prob_trxn_mar = 0 THEN 0 ELSE log(prob_trxn_mar) END)
+                + prob_trxn_apr * (CASE WHEN prob_trxn_apr = 0 THEN 0 ELSE log(prob_trxn_apr) END)
+                + prob_trxn_may * (CASE WHEN prob_trxn_may = 0 THEN 0 ELSE log(prob_trxn_may) END)
+                + prob_trxn_jun * (CASE WHEN prob_trxn_jun = 0 THEN 0 ELSE log(prob_trxn_jun) END)
+                + prob_trxn_jul * (CASE WHEN prob_trxn_jul = 0 THEN 0 ELSE log(prob_trxn_jul) END)
+                + prob_trxn_aug * (CASE WHEN prob_trxn_aug = 0 THEN 0 ELSE log(prob_trxn_aug) END)
+                + prob_trxn_sep * (CASE WHEN prob_trxn_sep = 0 THEN 0 ELSE log(prob_trxn_sep) END)
+                + prob_trxn_oct * (CASE WHEN prob_trxn_oct = 0 THEN 0 ELSE log(prob_trxn_oct) END)
+                + prob_trxn_nov * (CASE WHEN prob_trxn_nov = 0 THEN 0 ELSE log(prob_trxn_nov) END)
+                + prob_trxn_dec * (CASE WHEN prob_trxn_dec = 0 THEN 0 ELSE log(prob_trxn_dec) END)
+            ) AS month_entropy
+        FROM (
+            SELECT id,
+                sum(CASE WHEN month_trxn = 1 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_jan,
+                sum(CASE WHEN month_trxn = 2 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_feb,
+                sum(CASE WHEN month_trxn = 3 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_mar,
+                sum(CASE WHEN month_trxn = 4 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_apr,
+                sum(CASE WHEN month_trxn = 5 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_may,
+                sum(CASE WHEN month_trxn = 6 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_jun,
+                sum(CASE WHEN month_trxn = 7 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_jul,
+                sum(CASE WHEN month_trxn = 8 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_aug,
+                sum(CASE WHEN month_trxn = 9 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_sep,
+                sum(CASE WHEN month_trxn = 10 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_oct,
+                sum(CASE WHEN month_trxn = 11 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_nov,
+                sum(CASE WHEN month_trxn = 12 THEN 1 ELSE 0 END)::numeric / count(*) AS prob_trxn_dec
+            FROM (
+                SELECT id, EXTRACT(month FROM fecha_trxn) AS month_trxn FROM {0}
+            ) AS trxn_ts
+            GROUP BY id
+            ORDER BY id
+        ) AS prob_mes
     """.format(data_table_name)
     return pd.read_sql_query(query, con=con).set_index('id')
 

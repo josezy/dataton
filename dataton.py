@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from tensorflow import keras
-# from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
+from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 # from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.preprocessing import StandardScaler
 
@@ -18,24 +18,25 @@ from fts_utils import (
     fts_sesion_stats,
     fts_fecha_trxn,
     fts_ratios_maestro,
+    fts_month_entropy,
 )
 
-# from ft_selection import rfecv_selector
+from ft_selection import rfecv_selector, kbest_selector
 
 
 PREDICT = False
-_LITE = True
+_LITE = False
 _CACHE = True
-_EPOCHS = 100
-_BATCH_SIZE = 1024
+_EPOCHS = 200
+_BATCH_SIZE = 128
 _BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
 
 
-# gs_params = {
-#     'batch_size': [32, 128, 512, 1024],
-#     'nb_epoch': [50, 100, 300, 500],
-#     'optimizer': ['sgd', 'adam', 'rmsprop']
-# }
+gs_params = {
+    'batch_size': [512, 1024],
+    'nb_epoch': [50, 100, 200, 500],
+    'optimizer': ['sgd', 'adam'],
+}
 
 
 con = psycopg2.connect(
@@ -50,17 +51,32 @@ con = psycopg2.connect(
 def select_features(data, rpta):
     start = time.time()
     bal_data, bal_rpta = balance_data(data, rpta, max_rptas=200)
+    # selected_features = [
+    #     'month_entropy',
+    #     'total_office_trxn', 'total_night_trxn',
+    #     'total_weekday_trxn', 'total_weekend_trxn',
+    #     'high_season_trxn', 'low_season_trxn',
+    #     'segmento',
+    # ]  # Hardcoded features
 
     # Select by RFECV
     # rfecv_selector.fit(bal_data, bal_rpta)
     # selected_features = data.columns[rfecv_selector.support_].to_list()
 
+    # Select by KBest
+    kbest_selector.fit_transform(bal_data, bal_rpta)
+    f_score_indexes = (-kbest_selector.scores_).argsort()[:20]
+    selected_features = data.columns[f_score_indexes].to_list()
+
     # Select by correlation matrix
-    data = bal_data.join(bal_rpta)
-    corrmat = data.corr()
-    rpta_corr = abs(corrmat['var_rpta'][:].drop('var_rpta'))
-    top = rpta_corr[rpta_corr > rpta_corr.mean()]
-    selected_features = top.index.to_list()
+    # data = bal_data.join(bal_rpta)
+    # corrmat = data.corr()
+    # rpta_corr = abs(corrmat['var_rpta'][:].drop('var_rpta'))
+    # top = rpta_corr[rpta_corr > rpta_corr.mean()]
+    # selected_features = top.index.to_list()
+
+    # if 'segmento' in selected_features:
+    #     selected_features.remove('segmento')
 
     print("[+] Feature selection elapsed time:", time.time() - start)
     return selected_features
@@ -95,6 +111,9 @@ def load_data(training=True, lite=True, cache=True):
         if training
         else 'ids_predict'
     )
+
+    print("month_entropy")
+    month_entropy = fts_month_entropy(con, data_table_name)
 
     print("ratio_descripcion_grupo, ratio_producto_asociado")
     ratios_maestro = fts_ratios_maestro(con, data_table_name)
@@ -133,6 +152,7 @@ def load_data(training=True, lite=True, cache=True):
     features = features.join(sesiones, on='id')
     features = features.join(fecha_trxns, on='id')
     features = features.join(ratios_maestro, on='id')
+    features = features.join(month_entropy, on='id')
 
     features = features.fillna(0)
     scaler = StandardScaler()
@@ -173,15 +193,15 @@ def base_model(input_dim, optimizer='sgd'):
     # Model definition
     model = keras.Sequential([
         keras.layers.Dense(12, input_dim=input_dim, activation='relu'),
-        keras.layers.Dropout(0.5),
-        keras.layers.Dense(128, activation='relu'),
-        keras.layers.Dropout(0.5),
-        keras.layers.Dense(32, activation='relu'),
-        keras.layers.Dropout(0.5),
+        # keras.layers.Dropout(0.5),
         # keras.layers.Dense(128, activation='relu'),
-        # keras.layers.Dense(64, activation='relu'),
+        # keras.layers.Dropout(0.5),
         # keras.layers.Dense(32, activation='relu'),
-        # keras.layers.Dense(16, activation='relu'),
+        # keras.layers.Dropout(0.5),
+        keras.layers.Dense(128, activation='relu'),
+        keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dense(32, activation='relu'),
+        keras.layers.Dense(16, activation='relu'),
         keras.layers.Dense(1, activation='sigmoid'),
     ])
     model.compile(
@@ -205,14 +225,20 @@ if __name__ == '__main__':
 
     model = base_model(input_dim=len(data.columns))
     model.summary()
-    model.fit(bal_data, bal_rpta, epochs=_EPOCHS, batch_size=_BATCH_SIZE)
+    # es_callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=100)
+    model.fit(
+        bal_data, bal_rpta,
+        epochs=_EPOCHS, batch_size=_BATCH_SIZE,
+        validation_split=0.2,
+        # callbacks=[es_callback]
+    )
 
     test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
     print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
 
     # High voltage
     bal_data, bal_rpta = balance_data(
-        test_data, test_rpta, max_rptas=500, balance_factor=1.0)
+        test_data, test_rpta, max_rptas=1000, balance_factor=1.0)
     prediction = model.predict_classes(bal_data)
     prediction = pd.DataFrame(
         prediction[:, 0],

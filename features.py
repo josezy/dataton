@@ -14,7 +14,7 @@ from sklearn.ensemble import ExtraTreesClassifier
 from eli5.sklearn import PermutationImportance
 from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 
-from dataton import balance_data, build_model
+from dataton import balance_data, base_model
 
 # LOAD DATA
 LITE = True
@@ -85,18 +85,18 @@ plt.draw()
 
 
 # Use feature importance
-def base_model():
-    return build_model(input_dim=len(X.columns))
+def build_model():
+    return base_model(input_dim=len(X.columns))
 
 
 # evaluate model with standardized dataset LENTOO
-# estimator = KerasClassifier(build_fn=base_model, epochs=100, verbose=0)
+# estimator = KerasClassifier(build_fn=build_model, epochs=100, verbose=0)
 # kfold = StratifiedKFold(n_splits=10, shuffle=True)
 # results = cross_val_score(estimator, features, rpta, cv=kfold)
 # print("Baseline: %.2f%% (%.2f%%)" % (results.mean() * 100, results.std() * 100))
 
 
-model = KerasClassifier(build_fn=base_model)
+model = KerasClassifier(build_fn=build_model)
 model.fit(X, y, epochs=50, batch_size=128)
 
 perm = PermutationImportance(model, random_state=1).fit(X, y)
