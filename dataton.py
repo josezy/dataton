@@ -1,12 +1,12 @@
 import time
 import psycopg2
 
+import xgboost as xgb
 import numpy as np
 import pandas as pd
 
 from tensorflow import keras
-# from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
-# from sklearn.model_selection import GridSearchCV, cross_val_score
+from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
 
 from fts_utils import (
@@ -22,20 +22,41 @@ from fts_utils import (
     fts_horadia_entropy,
 )
 
-from ft_selection import rfecv_selector, kbest_selector
+from ft_selection import kbest_selector
 
 
-VAL_ACC_TH = 0.8
 PREDICT = True
 _LITE = False
 _CACHE = True
-_EPOCHS = 1000
+_EPOCHS = 500
 _BATCH_SIZE = 128
 _LOAD_MODEL = False
 _BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
+VAL_ACC_TH = 0.8
+NO_SEGMENTO = True
+GRID_SEARCH = True
 
+PARAM = {
+    'max_depth': 2,
+    'eta': 1,
+    'objective': 'binary:logistic'
+}
+NUM_ROUND = 2
 
-# gs_params = {
+GRID_PARAMS = {
+    # "eta": [0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
+    # "max_depth": [3, 4, 5, 6, 8, 10, 12, 15],
+    # "min_child_weight": [1, 3, 5, 7],
+    # "gamma": [0.0, 0.1, 0.2, 0.3, 0.4],
+    # "colsample_bytree": [0.3, 0.4, 0.5, 0.7],
+    "eta": [0.50, 1.0, 1.5],
+    "max_depth": [1, 2, 3, 4],
+    "min_child_weight": [1, 3, 5, 7],
+    "gamma": [0.0, 0.1, 0.2, 0.3, 0.4],
+    "colsample_bytree": [0.3, 0.4, 0.5, 0.7],
+}
+
+# GRID_PARAMS = {
 #     'batch_size': [512, 1024],
 #     'nb_epoch': [50, 100, 200],
 #     'optimizer': ['sgd', 'adam']
@@ -60,10 +81,6 @@ def select_features(data, rpta):
     #     'high_season_trxn', 'low_season_trxn',
     #     'segmento',
     # ]  # Hardcoded features
-
-    # Select by RFECV
-    # rfecv_selector.fit(bal_data, bal_rpta)
-    # rfecv_features = data.columns[rfecv_selector.support_].to_list()
 
     # Select by KBest
     kbest_selector.fit_transform(bal_data, bal_rpta)
@@ -224,81 +241,101 @@ if __name__ == '__main__':
 
     print("[+] Selecting features...")
     selected_features = select_features(data, rpta)
+    # Work without segmento
+    if NO_SEGMENTO and 'segmento' in selected_features:
+        selected_features.remove('segmento')
     print(f"[+] Features selected [{len(selected_features)}]:\n{selected_features}")
 
     data = data[selected_features]
     train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
+
+    grid_parameters = PARAM
+    if GRID_SEARCH:
+        print("[!] CV / GridSearchCV")
+        clf = xgb.XGBClassifier()
+        grid = GridSearchCV(clf, GRID_PARAMS, cv=3, scoring="neg_log_loss", n_jobs=-1)
+        bal_data, bal_rpta = balance_data(train_data, train_rpta, max_ones=200)
+        d_train = xgb.DMatrix(bal_data, label=bal_rpta)
+        grid.fit(bal_data, bal_rpta)
+        print("[!] Grid Search:")
+        print(f"\tBest params: {grid.best_params_}")
+        print(f"\tBest score: {grid.best_score_}")
+        grid_parameters = PARAM.update(grid.best_params_)
+
     bal_data, bal_rpta = balance_data(train_data, train_rpta, balance_factor=_BALANCE_FACTOR)
+    d_train = xgb.DMatrix(bal_data, label=bal_rpta)
+    model = xgb.train(grid_parameters, d_train, NUM_ROUND)
+    # model = xgb.XGBRegressor(
+    #     n_estimators=100,
+    #     learning_rate=.1,
+    #     max_depth=6,
+    #     random_state=42,
+    #     n_jobs=-1,
+    #     early_stopping_rounds=10
+    # )
+    # model.fit(
+    #     bal_data, bal_rpta,
+    #     eval_metric="rmse",
+    #     eval_set=[(test_data, test_rpta)],
+    #     verbose=True
+    # )
 
-    model_loaded = False
-    if _LOAD_MODEL:
-        try:
-            model = keras.models.load_model('data/model.h5')
-            model_loaded = True
-        except FileNotFoundError:
-            print("[!] Could not load model from data/model.h5")
+    # model_loaded = False
+    # if _LOAD_MODEL:
+    #     try:
+    #         model = keras.models.load_model('data/model.h5')
+    #         model_loaded = True
+    #     except FileNotFoundError:
+    #         print("[!] Could not load model from data/model.h5")
 
-    if not model_loaded:
-        model = base_model(input_dim=len(data.columns))
-        model.summary()
-        for epoch in range(_EPOCHS):
-            fit = model.fit(
-                bal_data, bal_rpta,
-                epochs=1, batch_size=_BATCH_SIZE,
-                validation_split=0.2,
-                # validation_data=(test_data, test_rpta),
-                verbose=2,
-            )
-            print(f"Epoch {epoch}/{_EPOCHS}")
-            if 'val_acc' in fit.history and fit.history['val_acc'][-1] >= VAL_ACC_TH:
-                break
+    # if not model_loaded:
+    #     model = base_model(input_dim=len(data.columns))
+    #     model.summary()
+    #     for epoch in range(_EPOCHS):
+    #         fit = model.fit(
+    #             bal_data, bal_rpta,
+    #             epochs=1, batch_size=_BATCH_SIZE,
+    #             validation_split=0.2,
+    #             # validation_data=(test_data, test_rpta),
+    #             verbose=2,
+    #         )
+    #         print(f"Epoch {epoch}/{_EPOCHS}")
+    #         if 'val_acc' in fit.history and fit.history['val_acc'][-1] >= VAL_ACC_TH:
+    #             break
 
-        model.save('data/model.h5')
+    #     model.save('data/model.h5')
 
-    test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
-    print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
+    # test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
+    # print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
 
     # High voltage
-    for max_ones in (70, 200, 800, 1100, 1600):
+    for max_ones in (50, 250, 900, 1400, 2000):
         print(f"-- [ ones: {max_ones} ]")
         bal_data, bal_rpta = balance_data(
             test_data, test_rpta, max_ones=max_ones, balance_factor=1.0)
-        prediction = model.predict_classes(bal_data)
+        # prediction = model.predict_classes(bal_data)
+        d_test = xgb.DMatrix(bal_data)
+        prediction = model.predict(d_test)
         prediction = pd.DataFrame(
-            prediction[:, 0],
+            [round(value) for value in prediction],
+            # prediction[:, 0],
             columns=['probabilidad'],
             index=bal_data.index
         )
+
         ones = prediction[prediction.probabilidad == 1]
         print('Predicted', len(ones), 'ones. Expected', bal_rpta[bal_rpta == 1].count())
-
         wrong = np.where(prediction.probabilidad != bal_rpta)[0]
         print(f"Error: {len(wrong) / len(bal_rpta)} ({len(wrong)} of {len(bal_rpta)})\n")
-
-    # def build_model(optimizer='sgd'):
-    #     return base_model(input_dim=len(data.columns), optimizer=optimizer)
-
-    # Cross validation
-    # classifier = KerasClassifier(build_fn=build_model, nb_epoch=100, batch_size=10)
-    # accuracies = cross_val_score(estimator=classifier, X=bal_data, y=bal_rpta, cv=10, n_jobs=-1)
-    # print(f"[!] Accuracies: mean={accuracies.mean()}, var={accuracies.var()}")
-
-    # Grid Search
-    # classifier = KerasClassifier(build_fn=build_model)
-    # grid_search = GridSearchCV(
-    #     estimator=classifier, param_grid=gs_params, scoring='accuracy', cv=10)
-    # grid_search = grid_search.fit(bal_data, bal_rpta)
-    # print("[!] Gris Search:")
-    # print(f"\tBest params: {grid_search.best_params_}")
-    # print(f"\tBest score: {grid_search.best_score_}")
 
     # ================== [PREDICT] ================== #
     if PREDICT:
         print("[!] Predicting real data")
         ids, data, _ = load_data(training=False, cache=_CACHE)
         data = data[selected_features]
-        prediction = model.predict(data)
-        submission = pd.DataFrame(prediction[:, 0], columns=['probabilidad'], index=ids)
+        d_test = xgb.DMatrix(data)
+        prediction = model.predict(d_test)
+        submission = pd.DataFrame(prediction, columns=['probabilidad'], index=ids)
         submission.to_csv('data/submissions/jose.csv')
 
     con.close()
