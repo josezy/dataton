@@ -34,26 +34,24 @@ _LOAD_MODEL = False
 _BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
 VAL_ACC_TH = 0.8
 NO_SEGMENTO = True
-GRID_SEARCH = True
+GRID_SEARCH = False
 
 PARAM = {
-    'max_depth': 2,
-    'eta': 1,
+    'eta': 0.5,
+    'max_depth': 1,
+    'gamma': 0.0,
+    'min_child_weight': 5,
+    'colsample_bytree': 0.5,
     'objective': 'binary:logistic'
 }
 NUM_ROUND = 2
 
 GRID_PARAMS = {
-    # "eta": [0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
-    # "max_depth": [3, 4, 5, 6, 8, 10, 12, 15],
+    "eta": [0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
+    "max_depth": [3, 4, 5, 6, 8, 10, 12, 15],
     # "min_child_weight": [1, 3, 5, 7],
     # "gamma": [0.0, 0.1, 0.2, 0.3, 0.4],
     # "colsample_bytree": [0.3, 0.4, 0.5, 0.7],
-    "eta": [0.50, 1.0, 1.5],
-    "max_depth": [1, 2, 3, 4],
-    "min_child_weight": [1, 3, 5, 7],
-    "gamma": [0.0, 0.1, 0.2, 0.3, 0.4],
-    "colsample_bytree": [0.3, 0.4, 0.5, 0.7],
 }
 
 # GRID_PARAMS = {
@@ -249,22 +247,20 @@ if __name__ == '__main__':
     data = data[selected_features]
     train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
 
-    grid_parameters = PARAM
     if GRID_SEARCH:
         print("[!] CV / GridSearchCV")
         clf = xgb.XGBClassifier()
         grid = GridSearchCV(clf, GRID_PARAMS, cv=3, scoring="neg_log_loss", n_jobs=-1)
-        bal_data, bal_rpta = balance_data(train_data, train_rpta, max_ones=200)
-        d_train = xgb.DMatrix(bal_data, label=bal_rpta)
+        bal_data, bal_rpta = balance_data(data, rpta, max_ones=1000)
         grid.fit(bal_data, bal_rpta)
         print("[!] Grid Search:")
         print(f"\tBest params: {grid.best_params_}")
         print(f"\tBest score: {grid.best_score_}")
-        grid_parameters = PARAM.update(grid.best_params_)
+        PARAM.update(grid.best_params_)
 
     bal_data, bal_rpta = balance_data(train_data, train_rpta, balance_factor=_BALANCE_FACTOR)
     d_train = xgb.DMatrix(bal_data, label=bal_rpta)
-    model = xgb.train(grid_parameters, d_train, NUM_ROUND)
+    model = xgb.train(PARAM, d_train, NUM_ROUND)
     # model = xgb.XGBRegressor(
     #     n_estimators=100,
     #     learning_rate=.1,
