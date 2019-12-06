@@ -164,6 +164,52 @@ def fts_month_entropy(con, data_table_name):
             GROUP BY id
             ORDER BY id
         ) AS prob_mes
+        ORDER BY id
+    """.format(data_table_name)
+    return pd.read_sql_query(query, con=con).set_index('id')
+
+
+def fts_horadia_entropy(con, data_table_name):
+    query = """
+        SELECT id,
+            -(
+                prob_office_weekday_trxn * (CASE WHEN prob_office_weekday_trxn = 0 THEN 0 ELSE log(prob_office_weekday_trxn) END)
+                + prob_night_weekday_trxn * (CASE WHEN prob_night_weekday_trxn = 0 THEN 0 ELSE log(prob_night_weekday_trxn) END)
+                + prob_office_weekend_trxn * (CASE WHEN prob_office_weekend_trxn = 0 THEN 0 ELSE log(prob_office_weekend_trxn) END)
+                + prob_night_weekend_trxn * (CASE WHEN prob_night_weekend_trxn = 0 THEN 0 ELSE log(prob_night_weekend_trxn) END)
+            ) AS trxn_horadia_entropy
+        FROM (
+            SELECT id,
+                sum(CASE
+                    WHEN (hora_trxn BETWEEN 9 AND 18)
+                    AND (dia_trxn BETWEEN 1 AND 5)
+                    THEN 1 ELSE 0 END
+                )::numeric / count(*) AS prob_office_weekday_trxn,
+                sum(CASE
+                    WHEN (hora_trxn NOT BETWEEN 9 AND 18)
+                    AND (dia_trxn BETWEEN 1 AND 5)
+                    THEN 1 ELSE 0 END
+                )::numeric / count(*) AS prob_night_weekday_trxn,
+                sum(CASE
+                    WHEN (hora_trxn BETWEEN 9 AND 18)
+                    AND (dia_trxn NOT BETWEEN 1 AND 5)
+                    THEN 1 ELSE 0 END
+                )::numeric / count(*) AS prob_office_weekend_trxn,
+                sum(CASE
+                    WHEN (hora_trxn NOT BETWEEN 9 AND 18)
+                    AND (dia_trxn NOT BETWEEN 1 AND 5)
+                    THEN 1 ELSE 0 END
+                )::numeric / count(*) AS prob_night_weekend_trxn
+            FROM (
+                SELECT id,
+                    EXTRACT(hour FROM fecha_trxn) AS hora_trxn,
+                    EXTRACT(dow FROM fecha_trxn) AS dia_trxn
+                FROM {0}
+            ) AS trxn_ts
+            GROUP BY id
+            ORDER BY id
+        ) AS prob_horadia
+        ORDER BY id
     """.format(data_table_name)
     return pd.read_sql_query(query, con=con).set_index('id')
 

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from tensorflow import keras
-from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
+# from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 # from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.preprocessing import StandardScaler
 
@@ -19,24 +19,26 @@ from fts_utils import (
     fts_fecha_trxn,
     fts_ratios_maestro,
     fts_month_entropy,
+    fts_horadia_entropy,
 )
 
 from ft_selection import rfecv_selector, kbest_selector
 
 
-PREDICT = False
+PREDICT = True
 _LITE = False
 _CACHE = True
-_EPOCHS = 200
+_EPOCHS = 500
 _BATCH_SIZE = 128
+_LOAD_MODEL = False
 _BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
 
 
-gs_params = {
-    'batch_size': [512, 1024],
-    'nb_epoch': [50, 100, 200, 500],
-    'optimizer': ['sgd', 'adam'],
-}
+# gs_params = {
+#     'batch_size': [512, 1024],
+#     'nb_epoch': [50, 100, 200],
+#     'optimizer': ['sgd', 'adam']
+# }
 
 
 con = psycopg2.connect(
@@ -49,9 +51,8 @@ con = psycopg2.connect(
 
 
 def select_features(data, rpta):
-    start = time.time()
     bal_data, bal_rpta = balance_data(data, rpta, max_rptas=200)
-    # selected_features = [
+    # return [
     #     'month_entropy',
     #     'total_office_trxn', 'total_night_trxn',
     #     'total_weekday_trxn', 'total_weekend_trxn',
@@ -61,25 +62,25 @@ def select_features(data, rpta):
 
     # Select by RFECV
     # rfecv_selector.fit(bal_data, bal_rpta)
-    # selected_features = data.columns[rfecv_selector.support_].to_list()
+    # rfecv_features = data.columns[rfecv_selector.support_].to_list()
 
     # Select by KBest
     kbest_selector.fit_transform(bal_data, bal_rpta)
     f_score_indexes = (-kbest_selector.scores_).argsort()[:20]
-    selected_features = data.columns[f_score_indexes].to_list()
+    kbest_features = data.columns[f_score_indexes].to_list()
 
     # Select by correlation matrix
-    # data = bal_data.join(bal_rpta)
-    # corrmat = data.corr()
-    # rpta_corr = abs(corrmat['var_rpta'][:].drop('var_rpta'))
-    # top = rpta_corr[rpta_corr > rpta_corr.mean()]
-    # selected_features = top.index.to_list()
+    data = bal_data.join(bal_rpta)
+    corrmat = data.corr()
+    rpta_corr = abs(corrmat['var_rpta'][:].drop('var_rpta'))
+    top = rpta_corr[rpta_corr > rpta_corr.mean()]
+    corr_features = top.index.to_list()
 
-    # if 'segmento' in selected_features:
-    #     selected_features.remove('segmento')
-
-    print("[+] Feature selection elapsed time:", time.time() - start)
-    return selected_features
+    return list(set([
+        # *rfecv_selector,
+        *kbest_features,
+        *corr_features,
+    ]))
 
 
 def load_data(training=True, lite=True, cache=True):
@@ -111,6 +112,10 @@ def load_data(training=True, lite=True, cache=True):
         if training
         else 'ids_predict'
     )
+    start = time.time()
+
+    print("horadia_entropy")
+    horadia_entropy = fts_horadia_entropy(con, data_table_name)
 
     print("month_entropy")
     month_entropy = fts_month_entropy(con, data_table_name)
@@ -153,6 +158,7 @@ def load_data(training=True, lite=True, cache=True):
     features = features.join(fecha_trxns, on='id')
     features = features.join(ratios_maestro, on='id')
     features = features.join(month_entropy, on='id')
+    features = features.join(horadia_entropy, on='id')
 
     features = features.fillna(0)
     scaler = StandardScaler()
@@ -163,6 +169,8 @@ def load_data(training=True, lite=True, cache=True):
         var_rpta.get('var_rpta')
     ], axis=1)
     full_features.to_csv(f'data/features/{feats_file_name}')
+    print("[+] Feature extraction took:", time.time() - start, "seconds")
+    print("\tIt calculated", len(features.columns), "features")
     return var_rpta.index.to_series(), features, var_rpta.get('var_rpta')
 
 
@@ -232,6 +240,7 @@ if __name__ == '__main__':
         validation_split=0.2,
         # callbacks=[es_callback]
     )
+    model.save('data/model.h5')
 
     test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
     print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)

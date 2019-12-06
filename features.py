@@ -17,7 +17,7 @@ from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 from dataton import balance_data, base_model
 
 # LOAD DATA
-LITE = True
+LITE = False
 fts_filename = 'features_train_lite.csv' if LITE else 'features_train.csv'
 
 full_feats = pd.read_csv(f'data/features/{fts_filename}')
