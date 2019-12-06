@@ -6,8 +6,9 @@ import numpy as np
 import pandas as pd
 
 from tensorflow import keras
-from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.model_selection import GridSearchCV
 
 from fts_utils import (
     fts_totales,
@@ -21,8 +22,6 @@ from fts_utils import (
     fts_month_entropy,
     fts_horadia_entropy,
 )
-
-from ft_selection import kbest_selector
 
 
 PREDICT = True
@@ -81,8 +80,9 @@ def select_features(data, rpta):
     # ]  # Hardcoded features
 
     # Select by KBest
+    kbest_selector = SelectKBest(f_classif, k=10)
     kbest_selector.fit_transform(bal_data, bal_rpta)
-    f_score_indexes = (-kbest_selector.scores_).argsort()[:16]
+    f_score_indexes = (-kbest_selector.scores_).argsort()[:10]
     kbest_features = data.columns[f_score_indexes].to_list()
 
     # Select by correlation matrix
@@ -93,9 +93,8 @@ def select_features(data, rpta):
     corr_features = top.index.to_list()
 
     return list(set([
-        # *rfecv_selector,
         *kbest_features,
-        *corr_features,
+        # *corr_features,
     ]))
 
 
