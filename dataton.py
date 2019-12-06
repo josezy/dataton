@@ -13,11 +13,11 @@ from fts_utils import (
     fts_totales,
     fts_var_rpta,
     # fts_sesiones,
-    fts_modas,
+    # fts_modas,
     fts_ratio,
     fts_sesion_stats,
     fts_fecha_trxn,
-    fts_ratios_maestro,
+    # fts_ratios_maestro,
     fts_month_entropy,
     fts_horadia_entropy,
 )
@@ -25,10 +25,11 @@ from fts_utils import (
 from ft_selection import rfecv_selector, kbest_selector
 
 
+VAL_ACC_TH = 0.8
 PREDICT = True
 _LITE = False
 _CACHE = True
-_EPOCHS = 500
+_EPOCHS = 1000
 _BATCH_SIZE = 128
 _LOAD_MODEL = False
 _BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
@@ -51,7 +52,7 @@ con = psycopg2.connect(
 
 
 def select_features(data, rpta):
-    bal_data, bal_rpta = balance_data(data, rpta, max_rptas=200)
+    bal_data, bal_rpta = balance_data(data, rpta, max_ones=200)
     # return [
     #     'month_entropy',
     #     'total_office_trxn', 'total_night_trxn',
@@ -66,7 +67,7 @@ def select_features(data, rpta):
 
     # Select by KBest
     kbest_selector.fit_transform(bal_data, bal_rpta)
-    f_score_indexes = (-kbest_selector.scores_).argsort()[:20]
+    f_score_indexes = (-kbest_selector.scores_).argsort()[:16]
     kbest_features = data.columns[f_score_indexes].to_list()
 
     # Select by correlation matrix
@@ -120,8 +121,8 @@ def load_data(training=True, lite=True, cache=True):
     print("month_entropy")
     month_entropy = fts_month_entropy(con, data_table_name)
 
-    print("ratio_descripcion_grupo, ratio_producto_asociado")
-    ratios_maestro = fts_ratios_maestro(con, data_table_name)
+    # print("ratio_descripcion_grupo, ratio_producto_asociado")
+    # ratios_maestro = fts_ratios_maestro(con, data_table_name)
 
     print("total_office_trxn, total_night_trxn")
     fecha_trxns = fts_fecha_trxn(con, data_table_name)
@@ -132,8 +133,8 @@ def load_data(training=True, lite=True, cache=True):
     print("ratio_financiera, ratio_exitosa")
     ratios = fts_ratio(con, data_table_name)
 
-    print("moda_cdgtrn, moda_cdgrpta")
-    modas = fts_modas(con, data_table_name)
+    # print("moda_cdgtrn, moda_cdgrpta")
+    # modas = fts_modas(con, data_table_name)
 
     # print("times_used_disp, times_used_canal")
     # disposit, canal = fts_sesiones(con, data_table_name)
@@ -152,11 +153,11 @@ def load_data(training=True, lite=True, cache=True):
         # disposit.times_used_disp,
         # canal.times_used_canal,
     ], axis=1)
-    features = features.join(modas, on='id')
+    # features = features.join(modas, on='id')
     features = features.join(ratios, on='id')
     features = features.join(sesiones, on='id')
     features = features.join(fecha_trxns, on='id')
-    features = features.join(ratios_maestro, on='id')
+    # features = features.join(ratios_maestro, on='id')
     features = features.join(month_entropy, on='id')
     features = features.join(horadia_entropy, on='id')
 
@@ -174,16 +175,16 @@ def load_data(training=True, lite=True, cache=True):
     return var_rpta.index.to_series(), features, var_rpta.get('var_rpta')
 
 
-def balance_data(data, rpta, max_rptas=None, balance_factor=1.0):
+def balance_data(data, rpta, max_ones=None, balance_factor=1.0):
     # balance number of 0 and 1's
-    max_rptas = max_rptas or int(rpta.value_counts().min() * balance_factor)
+    max_ones = max_ones or int(rpta.value_counts().min() * balance_factor)
     bal_data = pd.concat([
-        data[rpta == 0][:int(max_rptas * balance_factor)],
-        data[rpta == 1][:max_rptas]
+        data[rpta == 0][:int(max_ones * balance_factor)],
+        data[rpta == 1][:max_ones]
     ])
     bal_rpta = pd.concat([
-        rpta[rpta == 0][:int(max_rptas * balance_factor)],
-        rpta[rpta == 1][:max_rptas]
+        rpta[rpta == 0][:int(max_ones * balance_factor)],
+        rpta[rpta == 1][:max_ones]
     ])
     return bal_data, bal_rpta
 
@@ -201,15 +202,13 @@ def base_model(input_dim, optimizer='sgd'):
     # Model definition
     model = keras.Sequential([
         keras.layers.Dense(12, input_dim=input_dim, activation='relu'),
-        # keras.layers.Dropout(0.5),
-        # keras.layers.Dense(128, activation='relu'),
-        # keras.layers.Dropout(0.5),
-        # keras.layers.Dense(32, activation='relu'),
-        # keras.layers.Dropout(0.5),
         keras.layers.Dense(128, activation='relu'),
         keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dense(64, activation='relu'),
+        keras.layers.Dense(32, activation='relu'),
         keras.layers.Dense(32, activation='relu'),
         keras.layers.Dense(16, activation='relu'),
+        keras.layers.Dense(8, activation='relu'),
         keras.layers.Dense(1, activation='sigmoid'),
     ])
     model.compile(
@@ -231,34 +230,50 @@ if __name__ == '__main__':
     train_data, train_rpta, test_data, test_rpta = split_train_test(data, rpta)
     bal_data, bal_rpta = balance_data(train_data, train_rpta, balance_factor=_BALANCE_FACTOR)
 
-    model = base_model(input_dim=len(data.columns))
-    model.summary()
-    # es_callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=100)
-    model.fit(
-        bal_data, bal_rpta,
-        epochs=_EPOCHS, batch_size=_BATCH_SIZE,
-        validation_split=0.2,
-        # callbacks=[es_callback]
-    )
-    model.save('data/model.h5')
+    model_loaded = False
+    if _LOAD_MODEL:
+        try:
+            model = keras.models.load_model('data/model.h5')
+            model_loaded = True
+        except FileNotFoundError:
+            print("[!] Could not load model from data/model.h5")
+
+    if not model_loaded:
+        model = base_model(input_dim=len(data.columns))
+        model.summary()
+        for epoch in range(_EPOCHS):
+            fit = model.fit(
+                bal_data, bal_rpta,
+                epochs=1, batch_size=_BATCH_SIZE,
+                validation_split=0.2,
+                # validation_data=(test_data, test_rpta),
+                verbose=2,
+            )
+            print(f"Epoch {epoch}/{_EPOCHS}")
+            if 'val_acc' in fit.history and fit.history['val_acc'][-1] >= VAL_ACC_TH:
+                break
+
+        model.save('data/model.h5')
 
     test_loss, test_acc = model.evaluate(test_data, test_rpta, verbose=2)
     print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
 
     # High voltage
-    bal_data, bal_rpta = balance_data(
-        test_data, test_rpta, max_rptas=1000, balance_factor=1.0)
-    prediction = model.predict_classes(bal_data)
-    prediction = pd.DataFrame(
-        prediction[:, 0],
-        columns=['probabilidad'],
-        index=bal_data.index
-    )
-    ones = prediction[prediction.probabilidad == 1]
-    print('\nPredicted', len(ones), 'ones. Expected', bal_rpta[bal_rpta == 1].count())
+    for max_ones in (70, 200, 800, 1100, 1600):
+        print(f"-- [ ones: {max_ones} ]")
+        bal_data, bal_rpta = balance_data(
+            test_data, test_rpta, max_ones=max_ones, balance_factor=1.0)
+        prediction = model.predict_classes(bal_data)
+        prediction = pd.DataFrame(
+            prediction[:, 0],
+            columns=['probabilidad'],
+            index=bal_data.index
+        )
+        ones = prediction[prediction.probabilidad == 1]
+        print('Predicted', len(ones), 'ones. Expected', bal_rpta[bal_rpta == 1].count())
 
-    wrong = np.where(prediction.probabilidad != bal_rpta)[0]
-    print(f"Error: {len(wrong) / len(bal_rpta)} ({len(wrong)} of {len(bal_rpta)})\n")
+        wrong = np.where(prediction.probabilidad != bal_rpta)[0]
+        print(f"Error: {len(wrong) / len(bal_rpta)} ({len(wrong)} of {len(bal_rpta)})\n")
 
     # def build_model(optimizer='sgd'):
     #     return base_model(input_dim=len(data.columns), optimizer=optimizer)
@@ -280,7 +295,7 @@ if __name__ == '__main__':
     # ================== [PREDICT] ================== #
     if PREDICT:
         print("[!] Predicting real data")
-        ids, data, _ = load_data(training=False, cache=False)
+        ids, data, _ = load_data(training=False, cache=_CACHE)
         data = data[selected_features]
         prediction = model.predict(data)
         submission = pd.DataFrame(prediction[:, 0], columns=['probabilidad'], index=ids)

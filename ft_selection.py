@@ -18,4 +18,4 @@ pipe = PipelineRFE([
 rfecv_selector = RFECV(pipe, cv=10, step=2, scoring="neg_mean_squared_error", n_jobs=-1)
 
 # Other
-kbest_selector = SelectKBest(f_classif, k=20)
+kbest_selector = SelectKBest(f_classif, k=16)
