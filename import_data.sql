@@ -120,8 +120,9 @@ FROM '/Users/joseb/dataton/data/DT19_maestro_cdgtrn_cdgrpta.csv' DELIMITER ',' C
 
 -- ARRANGE DATA
 -- replace 'None' strings with -1 and change type to integer
-UPDATE maestro_cdgtrn_cdgrpta SET cdgtrn = '-1' WHERE cdgtrn = 'None'
-UPDATE maestro_cdgtrn_cdgrpta SET cdgrpta = '-1' WHERE cdgrpta = 'None'
+UPDATE maestro_cdgtrn_cdgrpta SET cdgtrn = '-1' WHERE cdgtrn = 'None';
+UPDATE maestro_cdgtrn_cdgrpta SET cdgrpta = '-1' WHERE cdgrpta = 'None';
 ALTER TABLE maestro_cdgtrn_cdgrpta
 ALTER COLUMN cdgtrn TYPE integer USING cdgtrn::numeric::integer;
+ALTER TABLE maestro_cdgtrn_cdgrpta
 ALTER COLUMN cdgrpta TYPE integer USING cdgrpta::numeric::integer;
