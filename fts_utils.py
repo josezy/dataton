@@ -214,6 +214,47 @@ def fts_horadia_entropy(con, data_table_name):
     return pd.read_sql_query(query, con=con).set_index('id')
 
 
+def fts_culpabanco_entropy(con, data_table_name):
+    query = """
+        SELECT id,
+            -(
+                prob_culpa_banco * (CASE WHEN prob_culpa_banco = 0 THEN 0 ELSE log(prob_culpa_banco) END)
+                + prob_no_culpa_banco * (CASE WHEN prob_no_culpa_banco = 0 THEN 0 ELSE log(prob_no_culpa_banco) END)
+            ) AS culpabanco_entropy
+        FROM (
+            SELECT id,
+                sum(CASE WHEN culpa_banco = 'SI' THEN 1 ELSE 0 END)::numeric / count(*) AS prob_culpa_banco,
+                sum(CASE WHEN culpa_banco = 'SI' THEN 0 ELSE 1 END)::numeric / count(*) AS prob_no_culpa_banco
+            FROM {0} as trxns
+            INNER JOIN {1} AS maestro
+                ON trxns.canal = maestro.canal
+                    AND trxns.disposit = maestro.disposit
+                    AND trxns.cdgtrn = maestro.cdgtrn
+                    AND trxns.cdgrpta = maestro.cdgrpta
+            GROUP BY id
+            ORDER BY id
+        ) AS prob
+        ORDER BY id
+    """.format(data_table_name, maestro_table_name)
+    return pd.read_sql_query(query, con=con).set_index('id')
+
+
+def fts_interval(con, data_table_name):
+    query = """
+        SELECT id,
+            EXTRACT(epoch from avg(trxn_interval)) as avg_trxn_interval
+        FROM (
+            SELECT id,
+                (LEAD(fecha_trxn, 1) OVER (PARTITION BY id ORDER BY id)) - fecha_trxn AS trxn_interval
+            FROM {0}
+            GROUP BY id, fecha_trxn
+            ORDER BY id, fecha_trxn
+        ) AS intervals
+        GROUP BY id
+    """.format(data_table_name)
+    return pd.read_sql_query(query, con=con).set_index('id')
+
+
 def fts_ratios_maestro(con, data_table_name):
     descripcion_grupos = pd.read_sql_query(
         "SELECT DISTINCT descripcion_grupo FROM {0}".format(maestro_table_name), con=con)
@@ -244,4 +285,63 @@ def fts_ratios_maestro(con, data_table_name):
         GROUP BY trxns.id
         ORDER BY trxns.id
     """.format(data_table_name, maestro_table_name, d_grupo_ratios, prod_asociado_ratios)
+    return pd.read_sql_query(query, con=con).set_index('id')
+
+
+def fts_umbrales(con, data_table_name):
+    query = """
+        SELECT id,
+            -(
+                prob_trxn_lun * (CASE WHEN prob_trxn_lun = 0 THEN 0 ELSE log(prob_trxn_lun) END)
+                + prob_trxn_mar * (CASE WHEN prob_trxn_mar = 0 THEN 0 ELSE log(prob_trxn_mar) END)
+                + prob_trxn_mie * (CASE WHEN prob_trxn_mie = 0 THEN 0 ELSE log(prob_trxn_mie) END)
+                + prob_trxn_jue * (CASE WHEN prob_trxn_jue = 0 THEN 0 ELSE log(prob_trxn_jue) END)
+                + prob_trxn_vie * (CASE WHEN prob_trxn_vie = 0 THEN 0 ELSE log(prob_trxn_vie) END)
+                + prob_trxn_sab * (CASE WHEN prob_trxn_sab = 0 THEN 0 ELSE log(prob_trxn_sab) END)
+                + prob_trxn_dom * (CASE WHEN prob_trxn_dom = 0 THEN 0 ELSE log(prob_trxn_dom) END)
+            ) AS trxn_week_entropy,
+            umbral_trxn_lun,
+            umbral_trxn_mar,
+            umbral_trxn_mie,
+            umbral_trxn_jue,
+            umbral_trxn_vie,
+            umbral_trxn_sab,
+            umbral_trxn_dom
+        FROM (
+            SELECT id,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 0 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_lun,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 1 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_mar,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 2 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_mie,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 3 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_jue,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 4 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_vie,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 5 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_sab,
+                sum(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 6 THEN total_trxn_sesion ELSE 0 END)::numeric / sum(total_trxn_sesion) AS prob_trxn_dom,
+
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 0 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 0 THEN total_trxn_sesion END)::numeric AS umbral_trxn_lun,
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 1 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 1 THEN total_trxn_sesion END)::numeric AS umbral_trxn_mar,
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 2 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 2 THEN total_trxn_sesion END)::numeric AS umbral_trxn_mie,
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 3 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 3 THEN total_trxn_sesion END)::numeric AS umbral_trxn_jue,
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 4 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 4 THEN total_trxn_sesion END)::numeric AS umbral_trxn_vie,
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 5 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 5 THEN total_trxn_sesion END)::numeric AS umbral_trxn_sab,
+                avg(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 6 THEN total_trxn_sesion END)::numeric
+                    + 3*stddev(CASE WHEN EXTRACT(dow FROM avg_fecha_sesion) = 6 THEN total_trxn_sesion END)::numeric AS umbral_trxn_dom
+            FROM (
+                SELECT id, sesion,
+                    to_timestamp(avg(extract(epoch from fecha_trxn))) AT TIME ZONE 'UTC' AS avg_fecha_sesion,
+                    count(fecha_trxn) AS total_trxn_sesion
+                FROM {0}
+                GROUP BY id, sesion
+                ORDER BY id, sesion
+            ) AS tb
+            GROUP BY id
+            ORDER BY id
+        ) AS prob_mes
+        ORDER BY id
+    """.format(data_table_name)
     return pd.read_sql_query(query, con=con).set_index('id')

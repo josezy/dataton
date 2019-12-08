@@ -19,16 +19,26 @@ from dataton import balance_data, base_model
 # LOAD DATA
 LITE = False
 fts_filename = 'features_train_lite.csv' if LITE else 'features_train.csv'
+# fts_filename = 'mis_fts.csv'
 
 full_feats = pd.read_csv(f'data/features/{fts_filename}')
 rpta = full_feats.var_rpta
 features = full_feats.iloc[:, 1:-1]
 
-# balance this shit
-X, y = balance_data(features, rpta, max_rptas=200, balance_factor=1.0)
+# chosen_fts = [
+#     'avg_trxn_interval',
+#     'month_entropy',
+#     'total_trxn',
+#     # 'total_office_trxn', 'total_night_trxn',
+#     # 'total_weekday_trxn', 'total_weekend_trxn',
+#     # 'high_season_trxn', 'low_season_trxn',
+#     'segmento',
+# ]
+# features = features[chosen_fts]
 
 
 # Heatmap correlations
+X, y = balance_data(features, rpta)
 plt.figure()
 data = X.join(y)
 corrmat = data.corr()
@@ -45,6 +55,7 @@ plt.grid()
 plt.draw()
 
 
+X, y = balance_data(features, rpta, max_ones=200, balance_factor=1.0)
 # Feature importance
 plt.figure()
 model = ExtraTreesClassifier()

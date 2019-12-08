@@ -13,27 +13,33 @@ from sklearn.model_selection import GridSearchCV
 from fts_utils import (
     fts_totales,
     fts_var_rpta,
-    # fts_sesiones,
-    # fts_modas,
+    fts_sesiones,
+    fts_modas,
     fts_ratio,
     fts_sesion_stats,
     fts_fecha_trxn,
-    # fts_ratios_maestro,
+    fts_ratios_maestro,
     fts_month_entropy,
     fts_horadia_entropy,
+    fts_interval,
+    fts_culpabanco_entropy,
+    fts_umbrales,
 )
 
 
 PREDICT = True
 _LITE = False
 _CACHE = True
+NO_SEGMENTO = False
+
+_BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
+GRID_SEARCH = False
+
+# Keras constants
 _EPOCHS = 500
 _BATCH_SIZE = 128
 _LOAD_MODEL = False
-_BALANCE_FACTOR = 1.0  # relation between number of 0 & 1
 VAL_ACC_TH = 0.8
-NO_SEGMENTO = True
-GRID_SEARCH = False
 
 PARAM = {
     'eta': 0.5,
@@ -70,15 +76,30 @@ con = psycopg2.connect(
 
 
 def select_features(data, rpta):
-    bal_data, bal_rpta = balance_data(data, rpta, max_ones=200)
     # return [
-    #     'month_entropy',
-    #     'total_office_trxn', 'total_night_trxn',
-    #     'total_weekday_trxn', 'total_weekend_trxn',
-    #     'high_season_trxn', 'low_season_trxn',
+    #     # 'total_trxn', 'total_sesiones',
     #     'segmento',
+    #     # 'times_used_disp',
+    #     # 'times_used_canal',
+    #     # 'ratio_financiera',
+    #     # 'ratio_exitosa',
+    #     # 'ratio_no_exitosa',
+    #     # 'total_atypical_sesion',
+    #     # 'avg_normal_sesion',
+    #     # 'total_office_trxn', 'total_night_trxn',
+    #     # 'total_weekday_trxn', 'total_weekend_trxn',
+    #     # 'high_season_trxn', 'low_season_trxn',
+    #     # 'month_entropy',
+    #     'trxn_horadia_entropy',
+    #     # 'avg_trxn_interval',
+    #     # 'trxn_week_entropy',
+    #     # 'umbral_trxn_lun', 'umbral_trxn_mar',
+    #     # 'umbral_trxn_mie', 'umbral_trxn_jue',
+    #     # 'umbral_trxn_vie',
+    #     # 'umbral_trxn_sab', 'umbral_trxn_dom'
     # ]  # Hardcoded features
 
+    bal_data, bal_rpta = balance_data(data, rpta, max_ones=500)
     # Select by KBest
     kbest_selector = SelectKBest(f_classif, k=10)
     kbest_selector.fit_transform(bal_data, bal_rpta)
@@ -129,14 +150,23 @@ def load_data(training=True, lite=True, cache=True):
     )
     start = time.time()
 
+    print("umbrales")
+    umbrales = fts_umbrales(con, data_table_name)
+
+    print("culpabanco_entropy")
+    culpabanco_entropy = fts_culpabanco_entropy(con, data_table_name)
+
+    print("avg_trxn_interval")
+    intervals = fts_interval(con, data_table_name)
+
     print("horadia_entropy")
     horadia_entropy = fts_horadia_entropy(con, data_table_name)
 
     print("month_entropy")
     month_entropy = fts_month_entropy(con, data_table_name)
 
-    # print("ratio_descripcion_grupo, ratio_producto_asociado")
-    # ratios_maestro = fts_ratios_maestro(con, data_table_name)
+    print("ratio_descripcion_grupo, ratio_producto_asociado")
+    ratios_maestro = fts_ratios_maestro(con, data_table_name)
 
     print("total_office_trxn, total_night_trxn")
     fecha_trxns = fts_fecha_trxn(con, data_table_name)
@@ -147,11 +177,11 @@ def load_data(training=True, lite=True, cache=True):
     print("ratio_financiera, ratio_exitosa")
     ratios = fts_ratio(con, data_table_name)
 
-    # print("moda_cdgtrn, moda_cdgrpta")
-    # modas = fts_modas(con, data_table_name)
+    print("moda_cdgtrn, moda_cdgrpta")
+    modas = fts_modas(con, data_table_name)
 
-    # print("times_used_disp, times_used_canal")
-    # disposit, canal = fts_sesiones(con, data_table_name)
+    print("times_used_disp, times_used_canal")
+    disposit, canal = fts_sesiones(con, data_table_name)
 
     print("total_trxn, total_sesiones")
     totales = fts_totales(con, data_table_name)
@@ -162,18 +192,21 @@ def load_data(training=True, lite=True, cache=True):
     features = pd.concat([
         totales.total_trxn,
         totales.total_sesiones,
-        # var_rpta.year_analisis,
+        var_rpta.year_analisis,
         var_rpta.segmento,
-        # disposit.times_used_disp,
-        # canal.times_used_canal,
+        disposit.times_used_disp,
+        canal.times_used_canal,
     ], axis=1)
-    # features = features.join(modas, on='id')
+    features = features.join(modas, on='id')
     features = features.join(ratios, on='id')
     features = features.join(sesiones, on='id')
     features = features.join(fecha_trxns, on='id')
-    # features = features.join(ratios_maestro, on='id')
+    features = features.join(ratios_maestro, on='id')
     features = features.join(month_entropy, on='id')
     features = features.join(horadia_entropy, on='id')
+    features = features.join(intervals, on='id')
+    features = features.join(culpabanco_entropy, on='id')
+    features = features.join(umbrales, on='id')
 
     features = features.fillna(0)
     scaler = StandardScaler()
