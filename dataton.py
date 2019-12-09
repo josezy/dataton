@@ -7,7 +7,7 @@ import pandas as pd
 
 from tensorflow import keras
 from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.feature_selection import SelectKBest, f_classif, f_regression
 from sklearn.model_selection import GridSearchCV
 
 from fts_utils import (
@@ -42,21 +42,28 @@ _LOAD_MODEL = False
 VAL_ACC_TH = 0.8
 
 PARAM = {
-    'eta': 0.5,
-    'max_depth': 1,
-    'gamma': 0.0,
-    'min_child_weight': 5,
-    'colsample_bytree': 0.5,
-    'objective': 'binary:logistic'
+    'eta': 0.05,
+    'max_depth': 2,
+    'gamma': 0.4,
+    'min_child_weight': 3,
+    'colsample_bytree': 0.3,
+    'eval_metric': 'auc',
+    # 'scale_pos_weight': 0.12,
+    # 'reg_alpha': 0.1,
+    # 'reg_lambda': 0.1,
+    'n_estimators': 50,
+    'objective': 'binary:logistic',
+    # 'objective': 'reg:squarederror',
 }
-NUM_ROUND = 2
+NUM_ROUND = 1000
 
 GRID_PARAMS = {
-    "eta": [0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
-    "max_depth": [3, 4, 5, 6, 8, 10, 12, 15],
-    # "min_child_weight": [1, 3, 5, 7],
-    # "gamma": [0.0, 0.1, 0.2, 0.3, 0.4],
-    # "colsample_bytree": [0.3, 0.4, 0.5, 0.7],
+    "eta": [0.05, 0.15, 0.25, 0.5],
+    "max_depth": [2, 3, 4, 6, 8],
+    "min_child_weight": [1, 3, 5, 7],
+    "gamma": [0.0, 0.1, 0.2, 0.3, 0.4],
+    'n_estimators': [20, 50, 100, 250, 500, 800, 1000],
+    "colsample_bytree": [0.3, 0.4, 0.5, 0.7],
 }
 
 # GRID_PARAMS = {
@@ -78,19 +85,19 @@ con = psycopg2.connect(
 def select_features(data, rpta):
     # return [
     #     # 'total_trxn', 'total_sesiones',
-    #     'segmento',
+    #     # 'segmento',
     #     # 'times_used_disp',
     #     # 'times_used_canal',
     #     # 'ratio_financiera',
     #     # 'ratio_exitosa',
     #     # 'ratio_no_exitosa',
     #     # 'total_atypical_sesion',
-    #     # 'avg_normal_sesion',
-    #     # 'total_office_trxn', 'total_night_trxn',
-    #     # 'total_weekday_trxn', 'total_weekend_trxn',
-    #     # 'high_season_trxn', 'low_season_trxn',
-    #     # 'month_entropy',
-    #     'trxn_horadia_entropy',
+    #     'avg_normal_sesion',
+    #     'total_office_trxn', 'total_night_trxn',
+    #     'total_weekday_trxn', 'total_weekend_trxn',
+    #     'high_season_trxn', 'low_season_trxn',
+    #     'month_entropy',
+    #     # 'trxn_horadia_entropy',
     #     # 'avg_trxn_interval',
     #     # 'trxn_week_entropy',
     #     # 'umbral_trxn_lun', 'umbral_trxn_mar',
@@ -101,7 +108,7 @@ def select_features(data, rpta):
 
     bal_data, bal_rpta = balance_data(data, rpta, max_ones=500)
     # Select by KBest
-    kbest_selector = SelectKBest(f_classif, k=10)
+    kbest_selector = SelectKBest(f_regression, k=10)
     kbest_selector.fit_transform(bal_data, bal_rpta)
     f_score_indexes = (-kbest_selector.scores_).argsort()[:10]
     kbest_features = data.columns[f_score_indexes].to_list()
@@ -115,7 +122,7 @@ def select_features(data, rpta):
 
     return list(set([
         *kbest_features,
-        # *corr_features,
+        *corr_features,
     ]))
 
 
@@ -130,7 +137,7 @@ def load_data(training=True, lite=True, cache=True):
         try:
             fts = pd.read_csv(f'data/features/{feats_file_name}')
             print("Using cached features from ", feats_file_name, len(fts.columns))
-            print("\tFeatures:", fts.iloc[:, 1:-1].columns)
+            print("\tFeatures:", fts.iloc[:, 1:-1].columns.to_list())
             if training:
                 return fts.id, fts.iloc[:, 1:-1], fts.var_rpta
             else:
@@ -292,18 +299,28 @@ if __name__ == '__main__':
 
     bal_data, bal_rpta = balance_data(train_data, train_rpta, balance_factor=_BALANCE_FACTOR)
     d_train = xgb.DMatrix(bal_data, label=bal_rpta)
-    model = xgb.train(PARAM, d_train, NUM_ROUND)
+    bal_data, bal_rpta = balance_data(test_data, test_rpta, balance_factor=_BALANCE_FACTOR)
+    d_test = xgb.DMatrix(bal_data, label=bal_rpta)
+    model = xgb.train(
+        PARAM, d_train, NUM_ROUND,
+        evals=[(d_test, 'validation_0')],
+        early_stopping_rounds=60,
+        verbose_eval=True
+    )
+    # xgb.plot_importance(model)
+    # import matplotlib.pyplot as plt
+    # plt.show()
     # model = xgb.XGBRegressor(
-    #     n_estimators=100,
+    #     n_estimators=400,
     #     learning_rate=.1,
-    #     max_depth=6,
+    #     max_depth=3,
     #     random_state=42,
     #     n_jobs=-1,
     #     early_stopping_rounds=10
     # )
     # model.fit(
     #     bal_data, bal_rpta,
-    #     eval_metric="rmse",
+    #     eval_metric="auc",
     #     eval_set=[(test_data, test_rpta)],
     #     verbose=True
     # )
@@ -337,7 +354,7 @@ if __name__ == '__main__':
     # print('\nTest loss:', test_loss, '\nTest accuracy:', test_acc)
 
     # High voltage
-    for max_ones in (50, 250, 900, 1400, 2000):
+    for max_ones in (50, 250, 900, 1300, 1600):
         print(f"-- [ ones: {max_ones} ]")
         bal_data, bal_rpta = balance_data(
             test_data, test_rpta, max_ones=max_ones, balance_factor=1.0)
@@ -361,6 +378,7 @@ if __name__ == '__main__':
         print("[!] Predicting real data")
         ids, data, _ = load_data(training=False, cache=_CACHE)
         data = data[selected_features]
+        print("Predict data columns:", data.columns.to_list())
         d_test = xgb.DMatrix(data)
         prediction = model.predict(d_test)
         submission = pd.DataFrame(prediction, columns=['probabilidad'], index=ids)
