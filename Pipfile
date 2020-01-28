@@ -7,7 +7,7 @@ verify_ssl = true
 
 [packages]
 psycopg2 = "*"
-tensorflow = "==1.15"
+tensorflow = "==1.15.2"
 numpy = "*"
 pandas = "*"
 xgboost = "*"
